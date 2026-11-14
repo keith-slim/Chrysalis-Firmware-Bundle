@@ -92,7 +92,7 @@ patch(cpp, [
 sketch = root / "plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/examples/Devices/Keyboardio/Preonic/Preonic.ino"
 patch(sketch, [
     (
-        '  // Disable Keyclick by default\\n  Keyclick.disable();',
-        '  // Enable Keyclick by default; users can still toggle it with Fun+Z.\\n  Keyclick.enable();'
+        '  // Disable Keyclick by default\n  Keyclick.disable();',
+        '  // Enable Keyclick by default; users can still toggle it with Fun+Z.\n  Keyclick.enable();'
     ),
 ])
