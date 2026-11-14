@@ -79,33 +79,33 @@ ble = root / "src/kaleidoscope/driver/ble/Bluefruit.cpp"
 patch(ble, [
     (
         '  DEBUG_BLE_MSG("Connection established, handle: ", conn_handle);',
-        '  preonic_bdiag_event(1, current_device_id, conn->getPeerAddr().addr_type);\\n'
+        '  preonic_bdiag_event(1, current_device_id, conn->getPeerAddr().addr_type);\n'
         '  DEBUG_BLE_MSG("Connection established, handle: ", conn_handle);'
     ),
     (
         'void BLEBluefruit::secured_cb(uint16_t conn_handle) {',
-        'void BLEBluefruit::secured_cb(uint16_t conn_handle) {\\n'
+        'void BLEBluefruit::secured_cb(uint16_t conn_handle) {\n'
         '  preonic_bdiag_event(2, conn_handle, 0);'
     ),
     (
         '      conn->requestPairing();',
-        '      preonic_bdiag_event(3, current_device_id, 0);\\n'
+        '      preonic_bdiag_event(3, current_device_id, 0);\n'
         '      conn->requestPairing();'
     ),
     (
         'void BLEBluefruit::disconnect_cb(uint16_t conn_handle, uint8_t reason) {',
-        'void BLEBluefruit::disconnect_cb(uint16_t conn_handle, uint8_t reason) {\\n'
+        'void BLEBluefruit::disconnect_cb(uint16_t conn_handle, uint8_t reason) {\n'
         '  preonic_bdiag_event(4, conn_handle, reason);'
     ),
     (
         'void BLEBluefruit::startDiscoverableAdvertising() {',
-        'void BLEBluefruit::startDiscoverableAdvertising() {\\n'
+        'void BLEBluefruit::startDiscoverableAdvertising() {\n'
         '  preonic_bdiag_event(5, current_device_id, 0);'
     ),
 ])
 # Prototype visible to this translation unit; no changes to Bluefruit.h.
 ble_source = ble.read_text()
-ble_source = '#include <stdint.h>\\nextern "C" void preonic_bdiag_event(uint16_t, uint16_t, uint16_t);\\n' + ble_source
+ble_source = '#include <stdint.h>\nextern "C" void preonic_bdiag_event(uint16_t, uint16_t, uint16_t);\n' + ble_source
 ble.write_text(ble_source)
 
 # Keep one fixed-size RAM buffer across BLE mode. No flash wear, no secret keys,
@@ -179,8 +179,8 @@ static void preonic_bdiag_drain() {
 
 '''
 patch(sketch_diag, [
-    ('void setup() {\\n  Kaleidoscope.setup();', bdiag_code + 'void setup() {\\n  Kaleidoscope.setup();'),
-    ('void loop() {\\n  Kaleidoscope.loop();', 'void loop() {\\n  Kaleidoscope.loop();\\n  preonic_bdiag_drain();'),
+    ('void setup() {\n  Kaleidoscope.setup();', bdiag_code + 'void setup() {\n  Kaleidoscope.setup();'),
+    ('void loop() {\n  Kaleidoscope.loop();', 'void loop() {\n  Kaleidoscope.loop();\n  preonic_bdiag_drain();'),
 ])
 
 # Enable normal keyclick feedback at boot. Fun+Z still toggles it as before.
