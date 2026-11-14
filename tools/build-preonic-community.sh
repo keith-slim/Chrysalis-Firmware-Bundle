@@ -36,6 +36,14 @@ cp -a "$temp_core/libraries/Bluefruit52Lib/." \
 
 # Apply the checked Preonic-only runtime fixes on top of the pinned community code.
 python3 tools/patch-preonic-runtime.py
+# Confirm the build will use the requested ON-at-boot keyclick setting.
+preonic_sketch="lib/Kaleidoscope/plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/examples/Devices/Keyboardio/Preonic/Preonic.ino"
+grep -Fq '  Keyclick.enable();' "$preonic_sketch"
+if grep -Fq '  Keyclick.disable();' "$preonic_sketch"; then
+  echo "Unexpected Keyclick.disable() remains in Preonic sketch" >&2
+  exit 1
+fi
+echo "Verified: Preonic Keyclick enabled by default"
 
 # Existing Bundle Makefile generates output/Keyboardio/Preonic/default.zip.
 make Keyboardio/Preonic
