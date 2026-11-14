@@ -96,6 +96,59 @@ source=replace_once(source,
           if ( Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info) )''',
 '''          if (file.read((uint8_t*) bkeys, keylen) == keylen &&
               Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info))''',bonding)
+# Trace bond lookup decisions without printing keys/IRKs or full MACs.
+source=replace_once(source,
+'''bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)
+{
+  bool ret = false;''',
+'''bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)
+{
+  bool ret = false;
+  if (Serial) {
+    Serial.print("[BDIAG] bond_lookup type=");
+    Serial.print(addr->addr_type);
+    Serial.print(" peer_suffix=");
+    Serial.println(addr->addr[0], HEX);
+  }''',bonding)
+source=replace_once(source,
+'''  return ret;
+}
+
+
+/*------------------------------------------------------------------*/
+/* CCCD''',
+'''  if (Serial) {
+    Serial.print("[BDIAG] bond_lookup result=");
+    Serial.println(ret ? "FOUND" : "MISSING");
+  }
+  return ret;
+}
+
+
+/*------------------------------------------------------------------*/
+/* CCCD''',bonding)
+source=replace_once(source,
+'''          if (file.read((uint8_t*) bkeys, keylen) == keylen &&
+              Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info))''',
+'''          if (file.read((uint8_t*) bkeys, keylen) == keylen &&
+              Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info))''',bonding)
+# Above anchor verifies RPA matching remains present.
+source=replace_once(source,
+'''            BOND_LOG("Loaded keys from file %s/%s", dpath, file.name());''',
+'''            BOND_LOG("Loaded keys from file %s/%s", dpath, file.name());
+            if (Serial) Serial.println("[BDIAG] RPA_IRK_MATCH");''',bonding)
+source=replace_once(source,
+'''  if (ok && InternalFS.rename(tempname, filename)) {
+    BOND_LOG("Bond saved atomically to %s", filename);
+  } else {
+    BOND_LOG("Bond save failed; retaining old bond %s", filename);''',
+'''  if (ok && InternalFS.rename(tempname, filename)) {
+    BOND_LOG("Bond saved atomically to %s", filename);
+    if (Serial) Serial.println("[BDIAG] bond_save=OK");
+  } else {
+    BOND_LOG("Bond save failed; retaining old bond %s", filename);
+    if (Serial) Serial.println("[BDIAG] bond_save=FAILED");''',bonding)
+
 bonding.write_text(source)
 print("Patched atomic bond storage and full-length bond reads:",bonding)
 
@@ -114,3 +167,59 @@ source=replace_once(source,
   return true;''',connection)
 connection.write_text(source)
 print("Patched bond enqueue result handling:",connection)
+
+# Trace when pairing is genuinely initiated versus when a stored key is reused.
+security = root / "libraries/Bluefruit52Lib/src/BLESecurity.cpp"
+source = security.read_text()
+source=replace_once(source,
+'''    case BLE_GAP_EVT_SEC_PARAMS_REQUEST:
+    {''',
+'''    case BLE_GAP_EVT_SEC_PARAMS_REQUEST:
+    {
+      if (Serial) Serial.println("[BDIAG] SEC_PARAMS_REQUEST NEW_PAIRING_PATH");''',security)
+source=replace_once(source,
+'''    case BLE_GAP_EVT_AUTH_STATUS:
+    {
+      ble_gap_evt_auth_status_t* status = &evt->evt.gap_evt.params.auth_status;''',
+'''    case BLE_GAP_EVT_AUTH_STATUS:
+    {
+      ble_gap_evt_auth_status_t* status = &evt->evt.gap_evt.params.auth_status;
+      if (Serial) {
+        Serial.print("[BDIAG] AUTH_STATUS code=");
+        Serial.print(status->auth_status);
+        Serial.print(" bonded=");
+        Serial.println(status->bonded);
+      }''',security)
+source=replace_once(source,
+'''      if ( conn->loadBondKey(&bkeys) )
+      {
+        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, &bkeys.own_enc.enc_info, &bkeys.peer_id.id_info, NULL), );
+      } else
+      {
+        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, NULL, NULL, NULL), );
+      }''',
+'''      if ( conn->loadBondKey(&bkeys) )
+      {
+        if (Serial) Serial.println("[BDIAG] SEC_INFO_REPLY=STORED_KEY");
+        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, &bkeys.own_enc.enc_info, &bkeys.peer_id.id_info, NULL), );
+      } else
+      {
+        if (Serial) Serial.println("[BDIAG] SEC_INFO_REPLY=NO_KEY");
+        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, NULL, NULL, NULL), );
+      }''',security)
+source=replace_once(source,
+'''    case BLE_GAP_EVT_CONN_SEC_UPDATE:
+    {
+      const ble_gap_conn_sec_t* conn_sec = &evt->evt.gap_evt.params.conn_sec_update.conn_sec;''',
+'''    case BLE_GAP_EVT_CONN_SEC_UPDATE:
+    {
+      const ble_gap_conn_sec_t* conn_sec = &evt->evt.gap_evt.params.conn_sec_update.conn_sec;
+      if (Serial) {
+        Serial.print("[BDIAG] SECURED mode=");
+        Serial.print(conn_sec->sec_mode.sm);
+        Serial.print(" level=");
+        Serial.println(conn_sec->sec_mode.lv);
+      }''',security)
+security.write_text(source)
+print("Patched BLE authentication diagnostic events:",security)
+
