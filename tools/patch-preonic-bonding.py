@@ -1,225 +1,64 @@
 #!/usr/bin/env python3
-"""Apply narrowly-scoped bond-store safety fixes to the pinned Preonic nRF52 core.
+"""Preonic-only passive BLE security telemetry on the OFFICIAL Keyboardio nRF52 core.
 
-This patches only the temporary Keyboardio nRF52/Bluefruit52Lib installation
-used by the Preonic CI build. Fail closed if the pinned source changes.
+Never modify security flow, bond persistence, keys, or callbacks' return values.
+The external diagnostic callback records small numeric events in a RAM ring.
 """
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1]).resolve()
-bonding = root / "libraries/Bluefruit52Lib/src/utility/bonding.cpp"
-connection = root / "libraries/Bluefruit52Lib/src/BLEConnection.cpp"
-
-def replace_once(source, old, new, path):
-    count = source.count(old)
-    if count != 1:
-        raise SystemExit(f"{path}: expected one patch anchor, got {count}: {old[:100]!r}")
-    return source.replace(old, new, 1)
-
-source = bonding.read_text()
-
-start = source.index("static void bond_save_keys_dfr ")
-end = source.index("\nbool bond_save_keys ", start)
-old = source[start:end]
-new = r'''static void bond_save_keys_dfr (uint8_t role, uint16_t conn_hdl, bond_keys_t const * bkeys)
-{
-  uint8_t const * mac = bkeys->peer_id.id_addr_info.addr;
-  char filename[BOND_FNAME_LEN];
-  get_fname(filename, role, mac);
-
-  // Never delete the last usable bond before its replacement is committed.
-  // LittleFS rename replaces the destination atomically.
-  char tempname[BOND_FNAME_LEN + sizeof(".tmp")];
-  snprintf(tempname, sizeof(tempname), "%s.tmp", filename);
-  InternalFS.remove(tempname);
-
-  Adafruit_LittleFS_Namespace::File file(tempname, FO_WRITE, InternalFS);
-  if (!file) {
-    BOND_LOG("Failed to open temporary bond file %s", tempname);
-    return;
-  }
-
-  // Preserve the original on-disk field layout: key length + 80-byte keys,
-  // name length + name, then optional CCCD (saved by the following callback).
-  const uint8_t keylen = (uint8_t) sizeof(bond_keys_t);
-  bool ok = file.write(keylen) == 1;
-  ok = file.write((uint8_t const*) bkeys, sizeof(bond_keys_t)) == sizeof(bond_keys_t) && ok;
-
-  char devname[CFG_MAX_DEVNAME_LEN] = { 0 };
-  // A deferred save may outlive the BLE connection; do not dereference NULL.
-  BLEConnection* conn = Bluefruit.Connection(conn_hdl);
-  if (conn && conn->connected()) {
-    conn->getPeerName(devname, CFG_MAX_DEVNAME_LEN);
-  }
-  if (!devname[0]) {
-    snprintf(devname, sizeof(devname), "%02X:%02X:%02X:%02X:%02X:%02X",
-             mac[5], mac[4], mac[3], mac[2], mac[1], mac[0]);
-  }
-  const size_t namelen = strlen(devname) + 1;
-  ok = file.write((uint8_t) namelen) == 1 && ok;
-  ok = file.write((uint8_t const*) devname, namelen) == namelen && ok;
-  file.close();
-
-  // Re-open to validate persisted bytes before replacing an existing bond.
-  if (ok) {
-    Adafruit_LittleFS_Namespace::File verify(tempname, FO_READ, InternalFS);
-    bond_keys_t recovered;
-    ok = verify && verify.read() == (int) sizeof(bond_keys_t) &&
-         verify.read((uint8_t*) &recovered, sizeof(recovered)) == sizeof(recovered) &&
-         memcmp(&recovered, bkeys, sizeof(recovered)) == 0;
-    verify.close();
-  }
-
-  if (ok && InternalFS.rename(tempname, filename)) {
-    BOND_LOG("Bond saved atomically to %s", filename);
-  } else {
-    BOND_LOG("Bond save failed; retaining old bond %s", filename);
-    InternalFS.remove(tempname);
-  }
-}
-'''
-source=replace_once(source,old,new,bonding)
-source=replace_once(source,
-'''          file.read((uint8_t*) bkeys, keylen);
-
-          ret = true;
-          BOND_LOG("Loaded keys from file %s", filename);''',
-'''          if (file.read((uint8_t*) bkeys, keylen) == keylen) {
-            ret = true;
-            BOND_LOG("Loaded keys from file %s", filename);
-          } else {
-            BOND_LOG("Short read for bond file %s", filename);
-          }''',bonding)
-source=replace_once(source,
-'''          file.read((uint8_t*) bkeys, keylen);
-          if ( Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info) )''',
-'''          if (file.read((uint8_t*) bkeys, keylen) == keylen &&
-              Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info))''',bonding)
-# Trace bond lookup decisions without printing keys/IRKs or full MACs.
-source=replace_once(source,
-'''bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)
-{
-  bool ret = false;''',
-'''bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)
-{
-  bool ret = false;
-  if (Serial) {
-    Serial.print("[BDIAG] bond_lookup type=");
-    Serial.print(addr->addr_type);
-    Serial.print(" peer_suffix=");
-    Serial.println(addr->addr[0], HEX);
-  }''',bonding)
-source=replace_once(source,
-'''  return ret;
-}
-
-
-/*------------------------------------------------------------------*/
-/* CCCD''',
-'''  if (Serial) {
-    Serial.print("[BDIAG] bond_lookup result=");
-    Serial.println(ret ? "FOUND" : "MISSING");
-  }
-  return ret;
-}
-
-
-/*------------------------------------------------------------------*/
-/* CCCD''',bonding)
-source=replace_once(source,
-'''          if (file.read((uint8_t*) bkeys, keylen) == keylen &&
-              Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info))''',
-'''          if (file.read((uint8_t*) bkeys, keylen) == keylen &&
-              Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info))''',bonding)
-# Above anchor verifies RPA matching remains present.
-source=replace_once(source,
-'''            BOND_LOG("Loaded keys from file %s/%s", dpath, file.name());''',
-'''            BOND_LOG("Loaded keys from file %s/%s", dpath, file.name());
-            if (Serial) Serial.println("[BDIAG] RPA_IRK_MATCH");''',bonding)
-source=replace_once(source,
-'''  if (ok && InternalFS.rename(tempname, filename)) {
-    BOND_LOG("Bond saved atomically to %s", filename);
-  } else {
-    BOND_LOG("Bond save failed; retaining old bond %s", filename);''',
-'''  if (ok && InternalFS.rename(tempname, filename)) {
-    BOND_LOG("Bond saved atomically to %s", filename);
-    if (Serial) Serial.println("[BDIAG] bond_save=OK");
-  } else {
-    BOND_LOG("Bond save failed; retaining old bond %s", filename);
-    if (Serial) Serial.println("[BDIAG] bond_save=FAILED");''',bonding)
-
-bonding.write_text(source)
-print("Patched atomic bond storage and full-length bond reads:",bonding)
-
-# At minimum, propagate deferred callback enqueue failures. Note that the
-# callback's return value indicates enqueue success, not disk write completion.
-source=connection.read_text()
-source=replace_once(source,
-'''  bond_save_keys(_role, _conn_hdl, ltkey);
-  _bond_id_addr = ltkey->peer_id.id_addr_info;
-  _bonded = true;
-  return true;''',
-'''  // Report a callback queue failure instead of claiming a successful bond.
-  if (!bond_save_keys(_role, _conn_hdl, ltkey)) return false;
-  _bond_id_addr = ltkey->peer_id.id_addr_info;
-  _bonded = true; // In-memory state; disk save is still deferred.
-  return true;''',connection)
-connection.write_text(source)
-print("Patched bond enqueue result handling:",connection)
-
-# Trace when pairing is genuinely initiated versus when a stored key is reused.
 security = root / "libraries/Bluefruit52Lib/src/BLESecurity.cpp"
-source = security.read_text()
-source=replace_once(source,
-'''    case BLE_GAP_EVT_SEC_PARAMS_REQUEST:
-    {''',
-'''    case BLE_GAP_EVT_SEC_PARAMS_REQUEST:
-    {
-      if (Serial) Serial.println("[BDIAG] SEC_PARAMS_REQUEST NEW_PAIRING_PATH");''',security)
-source=replace_once(source,
-'''    case BLE_GAP_EVT_AUTH_STATUS:
-    {
-      ble_gap_evt_auth_status_t* status = &evt->evt.gap_evt.params.auth_status;''',
-'''    case BLE_GAP_EVT_AUTH_STATUS:
-    {
-      ble_gap_evt_auth_status_t* status = &evt->evt.gap_evt.params.auth_status;
-      if (Serial) {
-        Serial.print("[BDIAG] AUTH_STATUS code=");
-        Serial.print(status->auth_status);
-        Serial.print(" bonded=");
-        Serial.println(status->bonded);
-      }''',security)
-source=replace_once(source,
-'''      if ( conn->loadBondKey(&bkeys) )
-      {
-        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, &bkeys.own_enc.enc_info, &bkeys.peer_id.id_info, NULL), );
-      } else
-      {
-        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, NULL, NULL, NULL), );
-      }''',
-'''      if ( conn->loadBondKey(&bkeys) )
-      {
-        if (Serial) Serial.println("[BDIAG] SEC_INFO_REPLY=STORED_KEY");
-        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, &bkeys.own_enc.enc_info, &bkeys.peer_id.id_info, NULL), );
-      } else
-      {
-        if (Serial) Serial.println("[BDIAG] SEC_INFO_REPLY=NO_KEY");
-        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, NULL, NULL, NULL), );
-      }''',security)
-source=replace_once(source,
-'''    case BLE_GAP_EVT_CONN_SEC_UPDATE:
-    {
-      const ble_gap_conn_sec_t* conn_sec = &evt->evt.gap_evt.params.conn_sec_update.conn_sec;''',
-'''    case BLE_GAP_EVT_CONN_SEC_UPDATE:
-    {
-      const ble_gap_conn_sec_t* conn_sec = &evt->evt.gap_evt.params.conn_sec_update.conn_sec;
-      if (Serial) {
-        Serial.print("[BDIAG] SECURED mode=");
-        Serial.print(conn_sec->sec_mode.sm);
-        Serial.print(" level=");
-        Serial.println(conn_sec->sec_mode.lv);
-      }''',security)
-security.write_text(source)
-print("Patched BLE authentication diagnostic events:",security)
+bonding = root / "libraries/Bluefruit52Lib/src/utility/bonding.cpp"
 
+def patch(path, changes):
+    source = path.read_text()
+    for before, after in changes:
+        n = source.count(before)
+        if n != 1:
+            raise SystemExit(f"{path}: expected exactly one source anchor, got {n}: {before[:100]!r}")
+        source = source.replace(before, after, 1)
+    source = '#include <stdint.h>\nextern "C" void preonic_bdiag_event(uint16_t, uint16_t, uint16_t);\n' + source
+    path.write_text(source)
+    print("diagnostic-only", path)
+
+patch(security, [
+    (
+        '    case BLE_GAP_EVT_SEC_PARAMS_REQUEST:\n    {',
+        '    case BLE_GAP_EVT_SEC_PARAMS_REQUEST:\n    {\n'
+        '      preonic_bdiag_event(10, conn_hdl, 0);'
+    ),
+    (
+        '      ble_gap_evt_auth_status_t* status = &evt->evt.gap_evt.params.auth_status;',
+        '      ble_gap_evt_auth_status_t* status = &evt->evt.gap_evt.params.auth_status;\n'
+        '      preonic_bdiag_event(11, status->auth_status, status->bonded);'
+    ),
+    (
+        '      if ( conn->loadBondKey(&bkeys) )\n      {',
+        '      if ( conn->loadBondKey(&bkeys) )\n      {\n'
+        '        preonic_bdiag_event(12, conn_hdl, 0);'
+    ),
+    (
+        '      } else\n      {\n        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, NULL, NULL, NULL), );',
+        '      } else\n      {\n'
+        '        preonic_bdiag_event(13, conn_hdl, 0);\n'
+        '        VERIFY_STATUS(sd_ble_gap_sec_info_reply(conn_hdl, NULL, NULL, NULL), );'
+    ),
+    (
+        '      const ble_gap_conn_sec_t* conn_sec = &evt->evt.gap_evt.params.conn_sec_update.conn_sec;',
+        '      const ble_gap_conn_sec_t* conn_sec = &evt->evt.gap_evt.params.conn_sec_update.conn_sec;\n'
+        '      preonic_bdiag_event(14, conn_sec->sec_mode.sm, conn_sec->sec_mode.lv);'
+    ),
+])
+patch(bonding, [
+    (
+        'bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)\n{\n  bool ret = false;',
+        'bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)\n{\n  bool ret = false;\n'
+        '  uint8_t diagnostic_addr_type = addr->addr_type;'
+    ),
+    (
+        '  return ret;\n}\n\n\n/*------------------------------------------------------------------*/\n/* CCCD',
+        '  preonic_bdiag_event(15, diagnostic_addr_type, ret ? 1 : 0);\n'
+        '  return ret;\n}\n\n\n/*------------------------------------------------------------------*/\n/* CCCD'
+    ),
+])
