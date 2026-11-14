@@ -34,6 +34,9 @@ test -d "$temp_core/libraries/Bluefruit52Lib"
 cp -a "$temp_core/libraries/Bluefruit52Lib/." \
   "${candidates[0]}/libraries/Bluefruit52Lib/"
 
+# Apply the checked Preonic-only runtime fixes on top of the pinned community code.
+python3 tools/patch-preonic-runtime.py
+
 # Existing Bundle Makefile generates output/Keyboardio/Preonic/default.zip.
 make Keyboardio/Preonic
 test -s output/Keyboardio/Preonic/default.zip
