@@ -40,6 +40,32 @@ patch(switcher, [
 ble = root / "src/kaleidoscope/driver/ble/Bluefruit.cpp"
 patch(ble, [
     (
+        '  DEBUG_BLE_MSG("Connection established, handle: ", conn_handle);',
+        '  DEBUG_BLE_MSG("Connection established, handle: ", conn_handle);\n'
+        '  if (Serial) {\n'
+        '    Serial.print("[BDIAG] CONNECT slot=");\n'
+        '    Serial.print(current_device_id);\n'
+        '    Serial.print(" peer_type=");\n'
+        '    Serial.println(conn->getPeerAddr().addr_type);\n'
+        '  }'
+    ),
+    (
+        'void BLEBluefruit::startDiscoverableAdvertising() {',
+        'void BLEBluefruit::startDiscoverableAdvertising() {\n'
+        '  if (Serial) Serial.println("[BDIAG] EXPLICIT_PAIR_MODE_START");'
+    ),
+    (
+        '  DEBUG_BLE_MSG("ERROR: failed to set slot-specific address for slot ", slot_id);',
+        '  if (Serial) { Serial.print("[BDIAG] SLOT_ADDR_SET_FAILED slot="); Serial.println(slot_id); }\n'
+        '  DEBUG_BLE_MSG("ERROR: failed to set slot-specific address for slot ", slot_id);'
+    ),
+    (
+        '    if (Bluefruit.setAddr(&slot_addr)) {\n      return;',
+        '    if (Bluefruit.setAddr(&slot_addr)) {\n'
+        '      if (Serial) { Serial.print("[BDIAG] SLOT_ADDR_OK slot="); Serial.println(slot_id); }\n'
+        '      return;'
+    ),
+    (
         'if (rssi == 127 || rssi < -90) {',
         'if (rssi == 127) {'
     ),
