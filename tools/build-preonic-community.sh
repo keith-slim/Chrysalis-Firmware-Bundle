@@ -18,7 +18,7 @@ echo "Verified master Kaleidoscope: $actual_sha"
 # Passive diagnostics are compiled only into this Preonic artifact. They never
 # change BLE/security decisions and preserve master BLE behavior.
 core_root="${ARDUINO_DIRECTORIES_DATA:-$PWD/.arduino/data}/packages/keyboardio/hardware/nrf52"
-mapfile -t cores < <(find "$core_root" -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/libraries/Bluefruit52Lib/src/BLESecurity.cpp' \\; -print)
+mapfile -t cores < <(find "$core_root" -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/libraries/Bluefruit52Lib/src/BLESecurity.cpp' \; -print)
 test "${#cores[@]}" -eq 1
 python3 tools/patch-preonic-bonding.py "${cores[0]}"
 python3 tools/patch-preonic-runtime.py
