@@ -89,6 +89,7 @@ patch(cpp, [
 ])
 
 # Enable normal keyclick feedback at boot. Fun+Z still toggles it as before.
+# CI verification: use the exact pinned community sketch's startup setting.
 sketch = root / "plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/examples/Devices/Keyboardio/Preonic/Preonic.ino"
 patch(sketch, [
     (
