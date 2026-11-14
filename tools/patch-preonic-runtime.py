@@ -40,21 +40,6 @@ patch(switcher, [
 ble = root / "src/kaleidoscope/driver/ble/Bluefruit.cpp"
 patch(ble, [
     (
-        '  // Send a Security Request now instead of waiting for the host to encrypt.\n'
-        '  // Some hosts (Windows 11 in particular) reconnect to a bonded keyboard\n'
-        '  // without promptly re-establishing encryption unless the peripheral asks;\n'
-        '  // until encryption is up, every HID notify fails and the link looks\n'
-        '  // "connected but not typing". requestPairing() is a non-blocking\n'
-        '  // sd_ble_gap_authenticate() — for a bonded peer it triggers re-encryption\n'
-        '  // with stored keys, for a new peer it nudges the host to start pairing\n'
-        '  // (which a keyboard always wants anyway).\n'
-        '  if (!conn->secured()) {\n'
-        '    conn->requestPairing();\n'
-        '  }',
-        '  // Match master: let the host initiate encryption on reconnect.\n'
-        '  // Do not actively request pairing on every BLE connection.'
-    ),
-    (
         'if (rssi == 127 || rssi < -90) {',
         'if (rssi == 127) {'
     ),
