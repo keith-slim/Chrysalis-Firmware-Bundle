@@ -114,6 +114,30 @@ patch(cpp, [
     ),
 ])
 
+# Diagnostic build: initialize USB CDC explicitly. nRF52 main.cpp only starts
+# Serial automatically with CFG_DEBUG, which is normally off. Do not wait for
+# a host here; the keyboard must still start when used wirelessly.
+sketch_diag = root / "plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/examples/Devices/Keyboardio/Preonic/Preonic.ino"
+patch(sketch_diag, [
+    (
+        'void setup() {\n  Kaleidoscope.setup();',
+        'void setup() {\n  Serial.begin(115200);  // BDIAG: USB CDC available without CFG_DEBUG\n'
+        '  Kaleidoscope.setup();'
+    ),
+    (
+        'void loop() {\n  Kaleidoscope.loop();',
+        'void loop() {\n'
+        '  static bool bdiag_serial_ready = false;\n'
+        '  if (Serial && !bdiag_serial_ready) {\n'
+        '    Serial.println("[BDIAG] USB_SERIAL_READY baud=115200");\n'
+        '    bdiag_serial_ready = true;\n'
+        '  } else if (!Serial) {\n'
+        '    bdiag_serial_ready = false;\n'
+        '  }\n'
+        '  Kaleidoscope.loop();'
+    ),
+])
+
 # Enable normal keyclick feedback at boot. Fun+Z still toggles it as before.
 # CI verification: use the exact pinned community sketch's startup setting.
 sketch = root / "plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/examples/Devices/Keyboardio/Preonic/Preonic.ino"
