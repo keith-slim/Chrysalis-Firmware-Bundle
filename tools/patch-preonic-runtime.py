@@ -71,6 +71,129 @@ patch(cpp, [
     ),
 ])
 
+# Restore only battery voltage validation, warning scheduling and atomic
+# rotary encoder taps from 8c8788e4. No BLE, USB mode, bond, or logging edits.
+# An uninitialized gauge reports 0 mV. Never enter battery shutdown on
+# invalid readings; throttle retries to the normal 10-second sampling interval.
+patch(header, [
+    (
+        '  void updateBatteryStatus(uint16_t voltage_mv) {\n    // Get current time',
+        '  void updateBatteryStatus(uint16_t voltage_mv) {\n'
+        '    if (voltage_mv == 0 || voltage_mv > 5000) {\n'
+        '      last_battery_check_time_ = millis();\n'
+        '      return;\n'
+        '    }\n'
+        '    // Get current time'
+    ),
+])
+
+# One event per encoder detent instead of two separately queued events.
+# This guarantees press+release are processed together even when the matrix
+# event queue is nearly full. It also halves encoder queue traffic.
+scanner = root / "src/kaleidoscope/driver/keyscanner/NRF52KeyScanner.h"
+patch(scanner, [
+    (
+        '    bool pressed : 1;\n  };',
+        '    bool pressed : 1;\n    bool tap : 1;  // Atomic press+release from an encoder\n  };'
+    ),
+    (
+        'bool queueKeyEvent(uint8_t row, uint8_t col, bool state) {\n'
+        '    Event event                           = {row, col, state};',
+        'bool queueKeyEvent(uint8_t row, uint8_t col, bool state, bool tap = false) {\n'
+        '    Event event                           = {row, col, state, tap};'
+    ),
+    (
+        '      updateMatrixScanKeyState();\n    }\n  }\n\n  uint8_t pressedKeyswitchCount()',
+        '      updateMatrixScanKeyState();\n'
+        '      if (event.tap) {\n'
+        '        setMatrixState(event.row, event.col, false);\n'
+        '        actOnMatrixScan();\n'
+        '        updateMatrixScanKeyState();\n'
+        '      }\n'
+        '    }\n  }\n\n  uint8_t pressedKeyswitchCount()'
+    ),
+])
+patch(header, [
+    (
+        '      active_scanner_->queueKeyEvent(ENCODER_CONFIGS[encoder_index].ccw.row,\n'
+        '                                     ENCODER_CONFIGS[encoder_index].ccw.col,\n'
+        '                                     true);\n'
+        '      active_scanner_->queueKeyEvent(ENCODER_CONFIGS[encoder_index].ccw.row,\n'
+        '                                     ENCODER_CONFIGS[encoder_index].ccw.col,\n'
+        '                                     false);',
+        '      active_scanner_->queueKeyEvent(ENCODER_CONFIGS[encoder_index].ccw.row,\n'
+        '                                     ENCODER_CONFIGS[encoder_index].ccw.col,\n'
+        '                                     true, true);'
+    ),
+    (
+        '      active_scanner_->queueKeyEvent(ENCODER_CONFIGS[encoder_index].cw.row,\n'
+        '                                     ENCODER_CONFIGS[encoder_index].cw.col,\n'
+        '                                     true);\n'
+        '      active_scanner_->queueKeyEvent(ENCODER_CONFIGS[encoder_index].cw.row,\n'
+        '                                     ENCODER_CONFIGS[encoder_index].cw.col,\n'
+        '                                     false);',
+        '      active_scanner_->queueKeyEvent(ENCODER_CONFIGS[encoder_index].cw.row,\n'
+        '                                     ENCODER_CONFIGS[encoder_index].cw.col,\n'
+        '                                     true, true);'
+    ),
+    (
+        '          battery_status_ = BatteryStatus::Normal;\n'
+        '          warning_active_ = false;',
+        '          battery_status_ = BatteryStatus::Normal;'
+    ),
+    (
+        '        battery_status_ = BatteryStatus::Normal;\n'
+        '        warning_active_ = false;',
+        '        battery_status_ = BatteryStatus::Normal;'
+    ),
+    (
+        """    // Handle warning indication timing
+    if (battery_status_ == BatteryStatus::Warning) {
+      if (!warning_active_ && (now - last_warning_time_ >= WARNING_INTERVAL_MS)) {
+        // Start a new warning period
+        warning_active_    = true;
+        last_warning_time_ = now;
+        triggerBatteryWarning(true);
+      } else if (warning_active_ && (now - last_warning_time_ >= WARNING_DURATION_MS)) {
+        // End the current warning period
+        warning_active_ = false;
+        triggerBatteryWarning(false);
+      }
+    }
+  }
+
+ public:""",
+        """  }
+
+  // Warning LED/tone timing is independent from the 10s voltage/I2C sampling.
+  void updateBatteryWarningIndicator(uint32_t now) {
+    if (battery_status_ != BatteryStatus::Warning) {
+      if (warning_active_) {
+        warning_active_ = false;
+        triggerBatteryWarning(false);
+      }
+      return;
+    }
+    if (!warning_active_ && now - last_warning_time_ >= WARNING_INTERVAL_MS) {
+      warning_active_ = true;
+      last_warning_time_ = now;
+      triggerBatteryWarning(true);
+    } else if (warning_active_ && now - last_warning_time_ >= WARNING_DURATION_MS) {
+      warning_active_ = false;
+      triggerBatteryWarning(false);
+    }
+  }
+
+ public:"""
+    ),
+    (
+        '    // Handle any pending GPIOTE events',
+        '    updateBatteryWarningIndicator(now);\n\n'
+        '    // Handle any pending GPIOTE events'
+    ),
+])
+
+
 # Enable normal keyclick feedback at boot. Fun+Z still toggles it as before.
 # CI verification: use the exact pinned community sketch's startup setting.
 sketch = root / "plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/examples/Devices/Keyboardio/Preonic/Preonic.ino"
