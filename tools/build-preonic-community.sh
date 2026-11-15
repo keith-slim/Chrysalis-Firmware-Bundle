@@ -19,7 +19,7 @@ echo "Verified master Kaleidoscope: $actual_sha"
 # defensive bond file handling in the installed official nRF52 core.
 # No diagnostic hooks, RAM log, or USB serial output are added.
 core_root="${ARDUINO_DIRECTORIES_DATA:-$PWD/.arduino/data}/packages/keyboardio/hardware/nrf52"
-mapfile -t cores < <(find "$core_root" -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/libraries/Bluefruit52Lib/src/utility/bonding.cpp' \\; -print)
+mapfile -t cores < <(find "$core_root" -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/libraries/Bluefruit52Lib/src/utility/bonding.cpp' \; -print)
 test "${#cores[@]}" -eq 1
 python3 tools/patch-preonic-bond-safety.py "${cores[0]}"
 python3 tools/patch-preonic-runtime.py
