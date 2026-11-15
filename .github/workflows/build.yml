@@ -1,87 +1,29 @@
-name: Build & Publish
+name: Preonic battery and Bluetooth build
 
 on:
   push:
-    branches:
-      - '**'  # Runs on pushes to any branch
+    branches: ['fix/preonic-battery-ble']
+  workflow_dispatch:
   pull_request:
-    branches:
-      - '**'  # Runs on PRs targeting any branch
+    branches: ['master']
+
 env:
   LC_ALL: C
-  EXTRA_VERSION: ${{ github.run_number }}
+
 jobs:
-  build:
+  build-preonic:
     runs-on: ubuntu-latest
-    env:
-      COMMIT_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
-      - name: Discover the version tag
-        id: version
+      - name: Install firmware build dependencies
         run: |
-          TAG=$(make version-tag)
-          echo "TAG=$TAG" >> $GITHUB_ENV
-      - name: Cache arduino dep downloads
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace}}/.arduino/downloads
-          key: ${{ runner.os }}-arduino-downloads
-      - run: pip3 install --user adafruit-nrfutil
-      - run: make setup
-      - run: make all KALEIDOSCOPE_TEMP_PATH=${{ github.workspace}}/.kaleidoscope-temp
-      - name: Collect the commit SHAs of the build
-        run: make collect-build-info
-      - name: Add the NEWS as a changelog to the artifacts
-        run: cp NEWS.md output/firmware-changelog.md
-
-      - name: Upload artifacts
+          python3 -m pip install --user adafruit-nrfutil
+          make setup
+      - name: Apply pinned community fixes and compile Preonic only
+        run: bash tools/build-preonic-community.sh
+      - name: Publish Preonic build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: firmware-build
-          path: |
-            output/
-
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    # Ensure this job only runs on pushes to master branch
-    if: github.ref == 'refs/heads/master'
-    env:
-      OUTPUT_DIR: artifacts/firmware-build
-    steps:
-      - uses: actions/checkout@v4
-      - name: Discover the version tag
-        id: version
-        run: |
-          TAG=$(make version-tag)
-          echo "TAG=$TAG" >> $GITHUB_ENV
-      - name: Download artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Delete the snapshot release and update the tag
-        if: ${{ contains(env.TAG, 'snapshot') }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.github_token }}
-        shell: bash
-        run: |
-          make update-tag-and-delete-gh-release
-
-      - name: Create the release
-        env:
-          GITHUB_TOKEN: ${{ secrets.github_token }}
-        run: |
-          make create-gh-release
-      - name: Package up the artifacts
-        shell: bash
-        run: |
-          make package-firmware-build
-
-      - name: Upload the firmware files & build info to the release
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.github_token }}
-        run: |
-          make upload-gh-release
+          name: preonic-battery-ble
+          path: output/Keyboardio/Preonic/default.zip
+          if-no-files-found: error
