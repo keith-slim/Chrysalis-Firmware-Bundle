@@ -23,6 +23,7 @@ mapfile -t cores < <(find "$core_root" -mindepth 1 -maxdepth 1 -type d -exec tes
 test "${#cores[@]}" -eq 1
 python3 tools/patch-preonic-bond-safety.py "${cores[0]}"
 python3 tools/patch-preonic-runtime.py
+python3 tools/patch-preonic-pr1540.py
 
 # Verify actual core patch and absence of diagnostic instrumentation.
 bond_file="${cores[0]}/libraries/Bluefruit52Lib/src/utility/bonding.cpp"
@@ -40,9 +41,15 @@ if grep -Fq '  Keyclick.disable();' "$preonic_sketch"; then
   exit 1
 fi
 
-# Assert master BLE and upstream nRF52 core have not been altered.
-git -C lib/Kaleidoscope diff --exit-code -- src/kaleidoscope/driver/ble/Bluefruit.cpp src/kaleidoscope/driver/ble/Bluefruit.h
-echo "Verified: master BLE driver unchanged; bond file safety guards only"
+# Only the three upstream PR #1540 BLE reconnect changes are allowed.
+# Bluefruit.h, USB auto-switching and bonding logic remain unchanged.
+ble_file="lib/Kaleidoscope/src/kaleidoscope/driver/ble/Bluefruit.cpp"
+grep -Fq 'if (!Bluefruit.Periph.connected() && !Bluefruit.Advertising.isRunning())' "$ble_file"
+grep -Fq 'Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE)' "$ble_file"
+grep -Fq 'if (!Bluefruit.Advertising.start(0))' "$ble_file"
+git -C lib/Kaleidoscope diff --exit-code -- src/kaleidoscope/driver/ble/Bluefruit.h
+git -C lib/Kaleidoscope diff --check -- src/kaleidoscope/driver/ble/Bluefruit.cpp
+echo "Verified: upstream PR #1540 only; USB switch and bond safety preserved"
 
 make Keyboardio/Preonic
 test -s output/Keyboardio/Preonic/default.zip
