@@ -167,13 +167,12 @@ static void preonic_bdiag_drain() {
     return;
   }
   if (!bdiag_usb_ready) {
+    // Defer session initialization until the CDC TX endpoint has space.
+    if (Serial.availableForWrite() < 32) return;
     bdiag_usb_ready = true;
     uint32_t head = __atomic_load_n(&bdiag_head, __ATOMIC_ACQUIRE);
     bdiag_cursor = head > BDIAG_CAPACITY ? head - BDIAG_CAPACITY : 0;
-    // Keep the first CDC write short to avoid stalling keyboard scanning.
-    if (Serial.availableForWrite() >= 32) {
-      Serial.println("[BDIAG] READY v2");
-    }
+    Serial.println("[BDIAG] READY v2");
   }
   // Drain at most one record per keyboard cycle, no blocking in BLE callback.
   uint32_t head = __atomic_load_n(&bdiag_head, __ATOMIC_ACQUIRE);
