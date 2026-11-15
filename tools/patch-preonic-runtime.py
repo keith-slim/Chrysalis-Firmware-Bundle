@@ -204,6 +204,47 @@ static void preonic_bdiag_drain() {
   bdiag_cursor = wanted;
 }
 
+// Manual fallback when a PC terminal doesn't raise CDC DTR. Fn+P types the
+// last 24 numeric events into the active application via USB keyboard HID.
+// This is opt-in only and does not depend on USB CDC being connected.
+static bool bdiag_hid_dump_active = false;
+static uint32_t bdiag_hid_cursor = 0;
+static uint32_t bdiag_hid_end = 0;
+static void preonic_bdiag_startHidDump() {
+  uint32_t head = __atomic_load_n(&bdiag_head, __ATOMIC_ACQUIRE);
+  bdiag_hid_cursor = (head > 24u) ? (head - 24u) : 0u;
+  bdiag_hid_end = head;
+  bdiag_hid_dump_active = true;
+}
+static void preonic_bdiag_drainHid() {
+  if (!bdiag_hid_dump_active ||
+      kaleidoscope::Runtime.device().getHostConnectionMode() != MODE_USB) return;
+  if (bdiag_hid_cursor >= bdiag_hid_end) {
+    Macros.type(PSTR("[BDIAG] END\n"));
+    bdiag_hid_dump_active = false;
+    return;
+  }
+  if (__atomic_test_and_set(&bdiag_lock, __ATOMIC_ACQUIRE)) return;
+  uint32_t seq = bdiag_hid_cursor + 1u;
+  BDiagRecord &slot = bdiag_ring[(seq - 1u) % BDIAG_CAPACITY];
+  bool valid = slot.published == seq;
+  uint32_t time_ms = valid ? slot.at_ms : 0;
+  uint16_t event = valid ? slot.event : 0;
+  uint16_t a = valid ? slot.a : 0;
+  uint16_t b = valid ? slot.b : 0;
+  __atomic_clear(&bdiag_lock, __ATOMIC_RELEASE);
+  char line[64];
+  if (valid) {
+    snprintf(line, sizeof(line), "[BDIAG] %lu %u %u %u\n",
+             (unsigned long)time_ms, event, a, b);
+  } else {
+    snprintf(line, sizeof(line), "[BDIAG] overwritten\n");
+  }
+  // Type one line per keyboard loop. The user explicitly triggered this dump.
+  Macros.type(line);
+  bdiag_hid_cursor = seq;
+}
+
 '''
 patch(sketch_diag, [
     ('void setup() {\n  Kaleidoscope.setup();', bdiag_code + 'void setup() {\n  Kaleidoscope.setup();'),
@@ -538,6 +579,37 @@ patch(header, [
         '    // Handle any pending GPIOTE events',
         '    updateBatteryWarningIndicator(now);\n\n'
         '    // Handle any pending GPIOTE events'
+    ),
+])
+
+
+# Default FUN+P = opt-in diagnostic dump as USB HID text when CDC DTR is off.
+# Append macro ID rather than reordering persisted macro IDs.
+patch(sketch_diag, [
+    (
+        '  MACRO_BATTERY_LEVEL  // Report current battery level',
+        '  MACRO_BATTERY_LEVEL,  // Report current battery level\n'
+        '  MACRO_DIAG_LOG'
+    ),
+    (
+        '    Key_LEDEffectNext,___,           Consumer_VolumeIncrement,___,            ___,             ___,             ___,             ___,             ___,                        ___,             ___,             ___,',
+        '    Key_LEDEffectNext,___,           Consumer_VolumeIncrement,___,            ___,             ___,             ___,             ___,             ___,                        ___,             M(MACRO_DIAG_LOG),             ___,'
+    ),
+    (
+        'const macro_t *macroAction(uint8_t macro_id, KeyEvent &event) {',
+        'static void preonic_bdiag_startHidDump();\n'
+        'const macro_t *macroAction(uint8_t macro_id, KeyEvent &event) {'
+    ),
+    (
+        '  case MACRO_BATTERY_LEVEL:\n    batteryLevelMacro(event.state);\n    break;',
+        '  case MACRO_BATTERY_LEVEL:\n    batteryLevelMacro(event.state);\n    break;\n'
+        '  case MACRO_DIAG_LOG:\n'
+        '    if (keyToggledOn(event.state)) preonic_bdiag_startHidDump();\n'
+        '    break;'
+    ),
+    (
+        '  preonic_bdiag_drain();',
+        '  preonic_bdiag_drain();\n  preonic_bdiag_drainHid();'
     ),
 ])
 
