@@ -15,12 +15,8 @@ if [ "$actual_sha" != "$MASTER_KALEIDOSCOPE_SHA" ]; then
 fi
 echo "Verified master Kaleidoscope: $actual_sha"
 
-# Passive diagnostics are compiled only into this Preonic artifact. They never
-# change BLE/security decisions and preserve master BLE behavior.
-core_root="${ARDUINO_DIRECTORIES_DATA:-$PWD/.arduino/data}/packages/keyboardio/hardware/nrf52"
-mapfile -t cores < <(find "$core_root" -mindepth 1 -maxdepth 1 -type d -exec test -f '{}/libraries/Bluefruit52Lib/src/BLESecurity.cpp' \; -print)
-test "${#cores[@]}" -eq 1
-python3 tools/patch-preonic-bonding.py "${cores[0]}"
+# Only Preonic USB fallback and battery-monitoring behavior + keyclick.
+# No patches to Bluefruit.cpp, bonding.cpp, BLESecurity.cpp or BLEConnection.cpp.
 python3 tools/patch-preonic-runtime.py
 
 preonic_sketch="lib/Kaleidoscope/plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/examples/Devices/Keyboardio/Preonic/Preonic.ino"
@@ -31,11 +27,8 @@ if grep -Fq '  Keyclick.disable();' "$preonic_sketch"; then
 fi
 
 # Assert master BLE and upstream nRF52 core have not been altered.
-# BLE source has instrumentation only; master is still the source of truth.
-if git -C lib/Kaleidoscope diff -- src/kaleidoscope/driver/ble/Bluefruit.cpp | grep -E '^[+-][^+-]' | grep -E '(requestPairing|setMITM|bond_remove_key)' | grep -v 'preonic_bdiag_event'; then
-  echo "Unexpected Bluetooth authentication logic change" >&2; exit 1
-fi
-echo "Verified: master BLE implementation + passive numeric telemetry"
+git -C lib/Kaleidoscope diff --exit-code -- src/kaleidoscope/driver/ble/Bluefruit.cpp src/kaleidoscope/driver/ble/Bluefruit.h
+echo "Verified: master BLE pairing and bonding source unchanged"
 
 make Keyboardio/Preonic
 test -s output/Keyboardio/Preonic/default.zip
