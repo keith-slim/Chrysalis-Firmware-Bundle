@@ -100,6 +100,15 @@ patch(ble, [
         '      conn->requestPairing();'
     ),
     (
+        '  DEBUG_BLE_MSG("Setting host connection mode to BLE");\n'
+        '  kaleidoscope::Runtime.device().setHostConnectionMode(MODE_BLE);',
+        '  // Do not steal the USB HID target when USB data is mounted.\n'
+        '  // Keep BLE security and connection state untouched.\n'
+        '  if (!kaleidoscope::Runtime.device().mcu().USBDataConnected()) {\n'
+        '    kaleidoscope::Runtime.device().setHostConnectionMode(MODE_BLE);\n'
+        '  }'
+    ),
+    (
         'void BLEBluefruit::disconnect_cb(uint16_t conn_handle, uint8_t reason) {',
         'void BLEBluefruit::disconnect_cb(uint16_t conn_handle, uint8_t reason) {\n'
         '  preonic_bdiag_event(4, conn_handle, reason);'
@@ -161,7 +170,10 @@ static void preonic_bdiag_drain() {
     bdiag_usb_ready = true;
     uint32_t head = __atomic_load_n(&bdiag_head, __ATOMIC_ACQUIRE);
     bdiag_cursor = head > BDIAG_CAPACITY ? head - BDIAG_CAPACITY : 0;
-    Serial.println("[BDIAG] RAM_LOG_READY v=1 events: 1=CONNECT 2=SECURED_CB 3=PAIR_REQ 4=DISCONNECT 5=PAIR_MODE 10=SEC_PARAMS 11=AUTH_STATUS 12=STORED_KEY 13=NO_KEY 14=SEC_UPDATE 15=BOND_LOOKUP");
+    // Keep the first CDC write short to avoid stalling keyboard scanning.
+    if (Serial.availableForWrite() >= 32) {
+      Serial.println("[BDIAG] READY v2");
+    }
   }
   // Drain at most one record per keyboard cycle, no blocking in BLE callback.
   uint32_t head = __atomic_load_n(&bdiag_head, __ATOMIC_ACQUIRE);
