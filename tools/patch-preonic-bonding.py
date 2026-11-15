@@ -51,6 +51,38 @@ patch(security, [
 ])
 patch(bonding, [
     (
+        '  // delete if file already exists\n'
+        '  if ( InternalFS.exists(filename) ) InternalFS.remove(filename);\n'
+        '\n'
+        '  Adafruit_LittleFS_Namespace::File file(filename, FO_WRITE, InternalFS);',
+        '  // LittleFS rename commits the new bond atomically; retain the old key\n'
+        '  // until a complete replacement file has been closed and verified.\n'
+        '  char tmp_filename[BOND_FNAME_LEN + 5];\n'
+        '  snprintf(tmp_filename, sizeof(tmp_filename), "%s.tmp", filename);\n'
+        '  if (InternalFS.exists(tmp_filename)) InternalFS.remove(tmp_filename);\n'
+        '  Adafruit_LittleFS_Namespace::File file(tmp_filename, FO_WRITE, InternalFS);'
+    ),
+    (
+        '  bdata_write(&file, devname, strlen(devname)+1); // save also null char\n'
+        '\n'
+        '  BOND_LOG("Saved keys for \\"%s\\" to file %s ( %ld bytes )", devname, filename, file.size());\n'
+        '\n'
+        '  file.close();',
+        '  devname[sizeof(devname) - 1] = 0;\n'
+        '  bdata_write(&file, devname, strlen(devname)+1); // save also null char\n'
+        '\n'
+        '  // Each field has one length byte; verify both records before commit.\n'
+        '  size_t expected = sizeof(bond_keys_t) + strlen(devname) + 3;\n'
+        '  bool complete = (file.size() == expected);\n'
+        '  file.close();\n'
+        '  if (!complete || !InternalFS.rename(tmp_filename, filename)) {\n'
+        '    InternalFS.remove(tmp_filename);\n'
+        '    BOND_LOG("Bond save rejected (incomplete or rename failure)");\n'
+        '    return;\n'
+        '  }\n'
+        '  BOND_LOG("Saved keys for \\"%s\\" to file %s", devname, filename);'
+    ),
+    (
         '  Bluefruit.Connection(conn_hdl)->getPeerName(devname, CFG_MAX_DEVNAME_LEN);',
         '  // Deferred callback may execute after disconnection. Never dereference NULL.\n'
         '  BLEConnection* name_conn = Bluefruit.Connection(conn_hdl);\n'
