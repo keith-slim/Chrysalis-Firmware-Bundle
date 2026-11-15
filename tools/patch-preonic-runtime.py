@@ -211,6 +211,222 @@ patch(sketch_diag, [
 ])
 
 
+
+# Automatic USB switching must preserve bond writes while not blocking
+# USB attach. BLE disconnection and re-advertising are serviced from loop(),
+# never by sleeping inside an asynchronous BLE callback.
+ble_header = root / "src/kaleidoscope/driver/ble/Bluefruit.h"
+patch(ble_header, [
+    (
+        '  static void disconnect();',
+        '  static void disconnect();\n'
+        '  static void requestGracefulDisconnect();\n'
+        '  static void servicePendingActions();'
+    ),
+    (
+        '  void scheduleSafeDisconnect();',
+        '  // Deferred safety state lives in Bluefruit.cpp.'
+    ),
+])
+patch(switcher, [
+    (
+        '    Runtime.device().ble().disconnect();',
+        '    Runtime.device().ble().requestGracefulDisconnect();'
+    ),
+])
+patch(ble, [
+    (
+        '// Add static variable to track sleep start time\nstatic uint32_t sleep_start_time = 0;',
+        '// Add static variable to track sleep start time\nstatic uint32_t sleep_start_time = 0;\n'
+        '// Deferred operations avoid blocking SoftDevice callbacks and USB attach.\n'
+        'static volatile bool preonic_disconnect_pending = false;\n'
+        'static volatile uint32_t preonic_disconnect_at = 0;\n'
+        'static volatile bool preonic_advertise_pending = false;\n'
+        'static volatile uint32_t preonic_advertise_at = 0;\n'
+        'static uint8_t preonic_advertise_failures = 0;'
+    ),
+    (
+        '        if (rssi == 127 || rssi < -90) {\n'
+        '          DEBUG_BLE_MSG("Connection validation failed: invalid RSSI=", rssi);\n'
+        '          connection_is_stale = true;\n'
+        '        } else {\n'
+        '          // Try to get connection parameters - if this fails, connection is likely dead\n'
+        '          uint16_t interval = conn->getConnectionInterval();\n'
+        '          if (interval == 0 || interval > 1000) {  // Sanity check on interval\n'
+        '            DEBUG_BLE_MSG("Connection validation failed: invalid interval=", interval);\n'
+        '            connection_is_stale = true;\n'
+        '          } else {\n'
+        '            DEBUG_BLE_MSG("Connection validated: RSSI=", rssi, "dBm, interval=", interval);\n'
+        '          }\n'
+        '        }',
+        '        // Weak/unknown RSSI does not prove a dead encrypted HID link.\n'
+        '        uint16_t interval = conn->getConnectionInterval();\n'
+        '        if (interval == 0 || interval > 1000) {\n'
+        '          DEBUG_BLE_MSG("Connection validation failed: invalid interval=", interval);\n'
+        '          connection_is_stale = true;\n'
+        '        } else {\n'
+        '          DEBUG_BLE_MSG("Connection parameters valid: RSSI=", rssi, " interval=", interval);\n'
+        '        }'
+    ),
+    (
+        """  // Error 0x516 indicates advertising failed - this can happen during rapid state changes
+  // We track consecutive failures to prevent getting stuck in a retry loop
+  static uint8_t failure_count      = 0;
+  static uint32_t last_failure_time = 0;
+
+  if (reason == 0x516) {
+    DEBUG_BLE_MSG("Nordic error 0x516: Advertising procedure failed");
+
+    // Reset failure count if more than 5 seconds have passed
+    uint32_t now = millis();
+    if ((now - last_failure_time) > 5000) {
+      failure_count = 0;
+    }
+    last_failure_time = now;
+
+    if (++failure_count >= 3) {
+      DEBUG_BLE_MSG("Multiple advertising failures detected, stopping retry loop");
+      failure_count = 0;
+      Bluefruit.Advertising.stop();
+      delay(500);
+      return;
+    }
+  }
+
+  switch (reason) {
+  case BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION:
+    DEBUG_BLE_MSG("Remote device terminated connection");
+
+    // For devices that have multiple remote terminations, use a more conservative approach
+    static uint8_t consecutive_remote_terminations = 0;
+    consecutive_remote_terminations++;
+
+    if (consecutive_remote_terminations >= 2) {
+      DEBUG_BLE_MSG("Multiple consecutive remote terminations detected, using conservative reconnection");
+      delay(500);  // Longer delay for problematic devices
+
+      // Reset advertising parameters to be more conservative
+      Bluefruit.Advertising.setInterval(80, 160);  // Slower advertising
+      Bluefruit.Advertising.setFastTimeout(10);    // Shorter fast mode
+    } else {
+      delay(100);  // Normal delay
+    }
+
+    startDiscoverableAdvertising();
+    break;
+
+  case BLE_HCI_LOCAL_HOST_TERMINATED_CONNECTION:
+    DEBUG_BLE_MSG("Local device terminated connection. Don't assume we should do something.");
+    consecutive_remote_terminations = 0;  // Reset counter on local termination
+    break;
+
+  case BLE_HCI_REMOTE_DEV_TERMINATION_DUE_TO_POWER_OFF:
+  case BLE_HCI_CONNECTION_TIMEOUT:
+  default:
+    DEBUG_BLE_MSG("Attempting to reconnect to last device");
+    consecutive_remote_terminations = 0;  // Reset counter on other disconnect types
+
+    if (current_device_id > 0) {
+      delay(250);  // Give time for cleanup
+      startConnectableAdvertising();
+    }
+    break;
+  }""",
+        """  // The disconnect reason is 8-bit; comparing it to Nordic error
+  // 0x516 was impossible. Advertising-start errors are handled at their source.
+  // A normal remote disconnect must NEVER remove the bond or start pairing.
+  if (reason == BLE_HCI_LOCAL_HOST_TERMINATED_CONNECTION) {
+    preonic_advertise_pending = false;
+  } else if (current_device_id > 0) {
+    preonic_advertise_at = millis() + 150;
+    preonic_advertise_pending = true;
+  }"""
+    ),
+    (
+        '  if (!Bluefruit.Advertising.start(ADVERTISING_TIMEOUT)) {\n'
+        '    DEBUG_BLE_MSG("Failed to start advertising");\n'
+        '  }\n'
+        '  DEBUG_BLE_MSG("Started connectable advertising");',
+        '  if (!Bluefruit.Advertising.start(ADVERTISING_TIMEOUT)) {\n'
+        '    DEBUG_BLE_MSG("Failed to start connectable advertising; scheduling retry");\n'
+        '    preonic_bdiag_event(16, preonic_advertise_failures, 0);\n'
+        '    if (preonic_advertise_failures < 5) ++preonic_advertise_failures;\n'
+        '    preonic_advertise_at = millis() + 250 * (1u << preonic_advertise_failures);\n'
+        '    preonic_advertise_pending = true;\n'
+        '    return;\n'
+        '  }\n'
+        '  preonic_advertise_failures = 0;\n'
+        '  DEBUG_BLE_MSG("Started connectable advertising");'
+    ),
+    (
+        '    kaleidoscope::Runtime.device().setHostConnectionMode(MODE_BLE);\n'
+        '    kaleidoscope::Runtime.device().hid().keyboard().releaseAllKeys();',
+        '    uint8_t saved_mode = kaleidoscope::Runtime.device().getHostConnectionMode();\n'
+        '    kaleidoscope::Runtime.device().setHostConnectionMode(MODE_BLE);\n'
+        '    kaleidoscope::Runtime.device().hid().keyboard().releaseAllKeys();\n'
+        '    kaleidoscope::Runtime.device().setHostConnectionMode(saved_mode);'
+    ),
+    (
+        '    scheduleSafeDisconnect();',
+        '    requestGracefulDisconnect();'
+    ),
+    (
+        """void BLEBluefruit::scheduleSafeDisconnect() {
+  uint32_t now = millis();
+  if (bond_write_pending && ((int32_t)(bond_write_deadline_ms - now) > 0)) {
+    uint32_t wait_ms = bond_write_deadline_ms - now;
+    DEBUG_BLE_MSG("Delaying disconnect %ums to allow bond write", wait_ms);
+    delay(wait_ms);
+    bond_write_pending = false;
+  }
+  disconnect();
+}""",
+        """void BLEBluefruit::requestGracefulDisconnect() {
+  uint32_t now = millis();
+  if (bond_write_pending && ((int32_t)(bond_write_deadline_ms - now) > 0)) {
+    // Keep the radio connected temporarily so the deferred bond save can finish.
+    preonic_disconnect_at = bond_write_deadline_ms;
+    preonic_disconnect_pending = true;
+    return;
+  }
+  preonic_disconnect_pending = false;
+  disconnect();
+}
+
+void BLEBluefruit::servicePendingActions() {
+  uint32_t now = millis();
+  if (preonic_disconnect_pending && (int32_t)(now - preonic_disconnect_at) >= 0) {
+    preonic_disconnect_pending = false;
+    bond_write_pending = false;
+    if (Bluefruit.Periph.connected()) disconnect();
+  }
+  // The only automatic re-advertising path is the connectable/bond-preserving
+  // one. Explicit pairing continues to use startDiscoverableAdvertising().
+  if (preonic_advertise_pending && (int32_t)(now - preonic_advertise_at) >= 0) {
+    preonic_advertise_pending = false;
+    if (current_device_id > 0 && !Bluefruit.Periph.connected() &&
+        !Bluefruit.Advertising.isRunning()) {
+      startConnectableAdvertising();
+    }
+  }
+}"""
+    ),
+])
+patch(sketch_diag, [
+    (
+        'void loop() {\n  Kaleidoscope.loop();\n  preonic_bdiag_drain();',
+        'void loop() {\n  Kaleidoscope.loop();\n'
+        '  kaleidoscope::Runtime.device().ble().servicePendingActions();\n'
+        '  preonic_bdiag_drain();'
+    ),
+])
+patch(sketch_diag, [
+    (
+        '      kaleidoscope::Runtime.device().ble().disconnect();',
+        '      kaleidoscope::Runtime.device().ble().requestGracefulDisconnect();'
+    ),
+])
+
 # One event per encoder detent instead of two separately queued events.
 # This guarantees press+release are processed together even when the matrix
 # event queue is nearly full. It also halves encoder queue traffic.
