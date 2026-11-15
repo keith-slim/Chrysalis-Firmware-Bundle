@@ -40,6 +40,13 @@ patch(switcher, [
 header = preonic / "device/keyboardio/Preonic.h"
 patch(header, [
     (
+        '  void updateBatteryStatus(uint16_t voltage_mv) {\n    // Get current time',
+        '  void updateBatteryStatus(uint16_t voltage_mv) {\n'
+        '    // An uninitialized MAX17048 returns 0. Do not treat read errors as shutdown.\n'
+        '    if (voltage_mv == 0 || voltage_mv > 5000) return;\n'
+        '    // Get current time'
+    ),
+    (
         '      // Update battery monitoring - this handles both warning and shutdown thresholds\n'
         '      // Use the MAX17048 battery gauge to provide the voltage reading\n'
         '      uint16_t battery_voltage = batteryGauge().getVoltage();\n'
@@ -128,10 +135,12 @@ struct BDiagRecord {
 static constexpr uint32_t BDIAG_CAPACITY = 128;
 static BDiagRecord bdiag_ring[BDIAG_CAPACITY];
 static uint32_t bdiag_head = 0;
+static uint8_t bdiag_lock = 0; // Nonblocking cross-context ring exclusion.
 static uint32_t bdiag_cursor = 0;
 static bool bdiag_usb_ready = false;
 }
 extern "C" void preonic_bdiag_event(uint16_t event, uint16_t a, uint16_t b) {
+  if (__atomic_test_and_set(&bdiag_lock, __ATOMIC_ACQUIRE)) return;
   uint32_t seq = __atomic_add_fetch(&bdiag_head, 1u, __ATOMIC_RELAXED);
   BDiagRecord &slot = bdiag_ring[(seq - 1u) % BDIAG_CAPACITY];
   __atomic_store_n(&slot.published, 0u, __ATOMIC_RELAXED);
@@ -140,6 +149,7 @@ extern "C" void preonic_bdiag_event(uint16_t event, uint16_t a, uint16_t b) {
   slot.a = a;
   slot.b = b;
   __atomic_store_n(&slot.published, seq, __ATOMIC_RELEASE);
+  __atomic_clear(&bdiag_lock, __ATOMIC_RELEASE);
 }
 static void preonic_bdiag_drain() {
   // DTR must be raised by the serial monitor. No USB -> no work.
@@ -160,12 +170,18 @@ static void preonic_bdiag_drain() {
     bdiag_cursor = head - BDIAG_CAPACITY;
     Serial.println("[BDIAG] OVERFLOW oldest events lost");
   }
+  // Snapshot a complete record under the same short lock as the writer.
+  // Never hold the lock during USB serial output.
+  if (__atomic_test_and_set(&bdiag_lock, __ATOMIC_ACQUIRE)) return;
   uint32_t wanted = bdiag_cursor + 1u;
   BDiagRecord &slot = bdiag_ring[(wanted - 1u) % BDIAG_CAPACITY];
-  if (__atomic_load_n(&slot.published, __ATOMIC_ACQUIRE) != wanted) return;
+  if (slot.published != wanted) {
+    __atomic_clear(&bdiag_lock, __ATOMIC_RELEASE);
+    return;
+  }
   uint32_t at_ms = slot.at_ms;
   uint16_t event = slot.event, a = slot.a, b = slot.b;
-  if (__atomic_load_n(&slot.published, __ATOMIC_ACQUIRE) != wanted) return;
+  __atomic_clear(&bdiag_lock, __ATOMIC_RELEASE);
   Serial.print("[BDIAG] ms=");
   Serial.print(at_ms);
   Serial.print(" event=");
