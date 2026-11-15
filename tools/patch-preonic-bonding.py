@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Preonic-only passive BLE security telemetry on the OFFICIAL Keyboardio nRF52 core.
+"""Preonic nRF52 bond-safety guards and passive security telemetry.
 
-Never modify security flow, bond persistence, keys, or callbacks' return values.
-The external diagnostic callback records small numeric events in a RAM ring.
+Reject malformed bond records without changing valid pairing/bond behavior.
 """
 from pathlib import Path
 import sys
@@ -51,6 +50,30 @@ patch(security, [
     ),
 ])
 patch(bonding, [
+    (
+        '  Bluefruit.Connection(conn_hdl)->getPeerName(devname, CFG_MAX_DEVNAME_LEN);',
+        '  // Deferred callback may execute after disconnection. Never dereference NULL.\n'
+        '  BLEConnection* name_conn = Bluefruit.Connection(conn_hdl);\n'
+        '  if (name_conn && name_conn->connected()) {\n'
+        '    name_conn->getPeerName(devname, CFG_MAX_DEVNAME_LEN);\n'
+        '  }'
+    ),
+    (
+        '        if ( keylen > 0 )\n'
+        '        {\n'
+        '          file.read((uint8_t*) bkeys, keylen);\n'
+        '\n'
+        '          ret = true;',
+        '        if ( keylen == sizeof(bond_keys_t) )\n'
+        '        {\n'
+        '          ret = (file.read((uint8_t*) bkeys, sizeof(bond_keys_t)) == sizeof(bond_keys_t));'
+    ),
+    (
+        '          file.read((uint8_t*) bkeys, keylen);\n'
+        '          if ( Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info) )',
+        '          if (file.read((uint8_t*) bkeys, sizeof(bond_keys_t)) == sizeof(bond_keys_t) &&\n'
+        '              Bluefruit.Security.resolveAddress(addr, &bkeys->peer_id.id_info))'
+    ),
     (
         'bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)\n{\n  bool ret = false;',
         'bool bond_load_keys(uint8_t role, ble_gap_addr_t* addr, bond_keys_t* bkeys)\n{\n  bool ret = false;\n'
