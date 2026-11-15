@@ -468,6 +468,31 @@ patch(sketch_diag, [
     ),
 ])
 
+
+# Cancel stale deferred operations whenever the user explicitly changes radio
+# intent; this prevents a pending reconnect from defeating BLE-OFF or PAIR.
+patch(ble, [
+    (
+        '  preonic_bdiag_event(5, current_device_id, 0);\n',
+        '  preonic_bdiag_event(5, current_device_id, 0);\n'
+        '  preonic_advertise_pending = false;\n'
+        '  preonic_disconnect_pending = false;\n'
+    ),
+    (
+        'void BLEBluefruit::selectDevice(uint8_t device_id) {\n  if (device_id == 0)',
+        'void BLEBluefruit::selectDevice(uint8_t device_id) {\n'
+        '  preonic_advertise_pending = false;\n'
+        '  preonic_disconnect_pending = false;\n'
+        '  if (device_id == 0)'
+    ),
+    (
+        'void BLEBluefruit::requestGracefulDisconnect() {\n  uint32_t now = millis();',
+        'void BLEBluefruit::requestGracefulDisconnect() {\n'
+        '  preonic_advertise_pending = false;\n'
+        '  uint32_t now = millis();'
+    ),
+])
+
 # One event per encoder detent instead of two separately queued events.
 # This guarantees press+release are processed together even when the matrix
 # event queue is nearly full. It also halves encoder queue traffic.
