@@ -1,8 +1,8 @@
-name: Preonic PR1540 BLE reconnect test build
+name: Preonic no-deep-sleep isolation build
 
 on:
   push:
-    branches: ['test/preonic-pr1540']
+    branches: ['test/preonic-no-deep-sleep']
   workflow_dispatch:
   pull_request:
     branches: ['master']
@@ -24,6 +24,6 @@ jobs:
       - name: Publish Preonic build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: preonic-pr1540
+          name: preonic-no-deep-sleep
           path: output/Keyboardio/Preonic/default.zip
           if-no-files-found: error
