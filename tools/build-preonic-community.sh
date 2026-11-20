@@ -24,6 +24,7 @@ test "${#cores[@]}" -eq 1
 python3 tools/patch-preonic-bond-safety.py "${cores[0]}"
 python3 tools/patch-preonic-runtime.py
 python3 tools/patch-preonic-pr1540.py
+python3 tools/patch-preonic-no-deep-sleep.py
 
 # Verify actual core patch and absence of diagnostic instrumentation.
 bond_file="${cores[0]}/libraries/Bluefruit52Lib/src/utility/bonding.cpp"
@@ -50,6 +51,16 @@ grep -Fq 'if (!Bluefruit.Advertising.start(0))' "$ble_file"
 git -C lib/Kaleidoscope diff --exit-code -- src/kaleidoscope/driver/ble/Bluefruit.h
 git -C lib/Kaleidoscope diff --check -- src/kaleidoscope/driver/ble/Bluefruit.cpp
 echo "Verified: upstream PR #1540 only; USB switch and bond safety preserved"
+
+# Check diagnostic scope: the one inactivity sleep call is compiled out.
+# Leave battery voltage shutdown and its protections enabled.
+preonic_header="lib/Kaleidoscope/plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/src/kaleidoscope/device/keyboardio/Preonic.h"
+grep -Fq '#if 0  // DIAGNOSTIC: disable automatic deep sleep only' "$preonic_header"
+grep -Fq '#endif  // DIAGNOSTIC: restore this block after isolation test' "$preonic_header"
+grep -Fq '    if (shouldEnterDeepSleep()) {' "$preonic_header"
+grep -Fq 'if (isBatteryBelowShutdownThreshold(voltage_mv))' "$preonic_header"
+git -C lib/Kaleidoscope diff --check -- plugins/Kaleidoscope-Hardware-Keyboardio-Preonic/src/kaleidoscope/device/keyboardio/Preonic.h
+echo "Verified: inactivity deep sleep disabled only; battery low-voltage cutoff preserved"
 
 make Keyboardio/Preonic
 test -s output/Keyboardio/Preonic/default.zip
