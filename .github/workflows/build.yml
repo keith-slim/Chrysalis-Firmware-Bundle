@@ -1,4 +1,4 @@
-name: Preonic no-deep-sleep isolation build
+name: Preonic keyboard pairing test build
 
 on:
   push:
@@ -24,6 +24,6 @@ jobs:
       - name: Publish Preonic build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: preonic-no-deep-sleep
+          name: preonic-keyboard-pairing
           path: output/Keyboardio/Preonic/default.zip
           if-no-files-found: error

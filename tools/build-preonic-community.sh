@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Preonic-only rebuild from the exact master Kaleidoscope and installed official core.
-# Preserve master BLE pairing, encryption, bonds and slot addressing unchanged.
+# Preserve encryption, bonds and slot addressing; add keyboard passkey entry only.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -42,15 +42,23 @@ if grep -Fq '  Keyclick.disable();' "$preonic_sketch"; then
   exit 1
 fi
 
-# Only the three upstream PR #1540 BLE reconnect changes are allowed.
-# Bluefruit.h, USB auto-switching and bonding logic remain unchanged.
+# Verify the upstream PR #1540 reconnect changes before layering pairing fixes.
+# USB auto-switching and bonding logic remain unchanged.
 ble_file="lib/Kaleidoscope/src/kaleidoscope/driver/ble/Bluefruit.cpp"
 grep -Fq 'if (!Bluefruit.Periph.connected() && !Bluefruit.Advertising.isRunning())' "$ble_file"
 grep -Fq 'Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE)' "$ble_file"
 grep -Fq 'if (!Bluefruit.Advertising.start(0))' "$ble_file"
 git -C lib/Kaleidoscope diff --exit-code -- src/kaleidoscope/driver/ble/Bluefruit.h
 git -C lib/Kaleidoscope diff --check -- src/kaleidoscope/driver/ble/Bluefruit.cpp
-echo "Verified: upstream PR #1540 only; USB switch and bond safety preserved"
+echo "Verified: upstream PR #1540 baseline; USB switch and bond safety preserved"
+
+# Apply keyboard authentication changes only after baseline verification.
+python3 tools/patch-preonic-keyboard-pairing.py "${cores[0]}"
+grep -Fq "Bluefruit.Security.enableKeyboardPasskeyEntry();" "$ble_file"
+grep -Fq "setIOCaps(false, false, true);" "${cores[0]}/libraries/Bluefruit52Lib/src/BLESecurity.cpp"
+grep -Fq "device().ble().handlePairingKey(event)" lib/Kaleidoscope/src/kaleidoscope/Runtime.cpp
+git -C lib/Kaleidoscope diff --check -- src/kaleidoscope/driver/ble/Bluefruit.cpp src/kaleidoscope/driver/ble/Bluefruit.h src/kaleidoscope/Runtime.cpp
+echo "Verified: nonblocking keyboard passkey path enabled; LESC and MITM retained"
 
 # Check diagnostic scope: the one inactivity sleep call is compiled out.
 # Leave battery voltage shutdown and its protections enabled.
